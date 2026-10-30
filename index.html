@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#05010f">
+<title>Neon Pong</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{width:100%;height:100%;overflow:hidden;background:#05010f;color:#e8f7ff;font-family:"Courier New",monospace;touch-action:none;overscroll-behavior:none;user-select:none;-webkit-user-select:none;position:fixed;inset:0}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.ov{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;background:rgba(5,1,15,.82);padding:20px;text-align:center;z-index:5;overflow:auto;touch-action:pan-y}
+.hidden{display:none!important}
+h1{font-size:clamp(40px,11vw,84px);color:#0ff;text-shadow:0 0 8px #0ff,0 0 24px #0ff,0 0 48px #f0f;letter-spacing:6px}
+h2{font-size:clamp(24px,6vw,40px);color:#f0f;text-shadow:0 0 10px #f0f}
+button{font:inherit;font-size:18px;color:#0ff;background:transparent;border:2px solid #0ff;border-radius:10px;padding:10px 22px;min-width:200px;cursor:pointer;box-shadow:0 0 10px #0ff6,inset 0 0 10px #0ff3;text-shadow:0 0 6px #0ff}
+button:active,button.sel{background:#0ff;color:#05010f;text-shadow:none}
+button.pink{color:#f0f;border-color:#f0f;box-shadow:0 0 10px #f0f6,inset 0 0 10px #f0f3;text-shadow:0 0 6px #f0f}
+button.pink.sel,button.pink:active{background:#f0f;color:#05010f}
+.row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.row button{min-width:0}
+input{font:inherit;font-size:20px;padding:10px;border:2px solid #ff0;background:#000;color:#ff0;border-radius:8px;text-align:center;width:min(280px,80vw);outline:none;box-shadow:0 0 10px #ff06}
+p{opacity:.85;font-size:14px;max-width:520px}
+#hud{position:absolute;top:max(8px,env(safe-area-inset-top));right:max(8px,env(safe-area-inset-right));z-index:4;display:flex;gap:8px}
+#hud button{min-width:0;padding:6px 12px;font-size:16px}
+table{border-collapse:collapse;font-size:clamp(12px,3.2vw,16px);width:min(640px,94vw)}
+th,td{padding:5px 6px;border-bottom:1px solid #fff2}
+th{color:#ff0;text-shadow:0 0 6px #ff0}
+tr:nth-child(2) td{color:#ffd700;text-shadow:0 0 8px #ffd700}
+tr:nth-child(3) td{color:#c0f0ff}
+tr:nth-child(4) td{color:#ff9a4d}
+td:first-child{color:#f0f}
+</style></head><body>
+<canvas id="c"></canvas>
+<div id="hud" class="hidden"><button id="bMute" title="Mute (M)">🔊</button><button id="bPause" title="Pause (P/Esc)">⏸</button></div>
+
+<div id="menu" class="ov">
+  <h1>PONG</h1>
+  <button id="b1p">1 PLAYER vs AI</button>
+  <div class="row" id="diffRow"><button data-d="easy">Easy</button><button data-d="medium" class="sel">Medium</button><button data-d="hard">Hard</button></div>
+  <button id="b2p" class="pink">2 PLAYERS</button>
+  <button id="bLB" class="pink">🏆 LEADERBOARD</button>
+  <p>First to 7 wins. Touch: drag your paddle (2P: each half of the screen controls its own paddle). Desktop: mouse or W/S / ↑↓ (2P: W/S vs ↑↓). P = pause, M = mute.</p>
+</div>
+
+<div id="pause" class="ov hidden">
+  <h2>PAUSED</h2>
+  <button id="bResume">RESUME</button>
+  <button id="bRestart" class="pink">RESTART</button>
+  <button id="bQuit">MAIN MENU</button>
+</div>
+
+<div id="over" class="ov hidden">
+  <h2 id="winTxt">WIN</h2>
+  <p id="statTxt"></p>
+  <div id="nameBox" class="hidden" style="display:flex;flex-direction:column;gap:10px;align-items:center">
+    <p>Save to leaderboard as:</p>
+    <input id="nameIn" maxlength="14" placeholder="Your name" autocomplete="off">
+    <button id="bSave">SAVE SCORE</button>
+  </div>
+  <button id="bAgain" class="pink">PLAY AGAIN</button>
+  <button id="bMenu2">MAIN MENU</button>
+</div>
+
+<div id="lb" class="ov hidden">
+  <h2>🏆 LEADERBOARD</h2>
+  <div class="row" id="lbTabs"><button data-t="all" class="sel">All</button><button data-t="easy">Easy</button><button data-t="medium">Medium</button><button data-t="hard">Hard</button></div>
+  <table id="lbTable"></table>
+  <p>Score = wins × difficulty (Hard×3, Medium×2, Easy×1), ties broken by point differential. Saved on this device only.</p>
+  <div class="row"><button id="bLBBack">BACK</button><button id="bLBReset" class="pink">RESET</button></div>
+</div>
+
+<script>
+"use strict";
+/* ===== Leaderboard backend interface (swap LocalLeaderboard for an online one later) ===== */
+const MULT={easy:1,medium:2,hard:3};
+class LocalLeaderboard{
+  constructor(key){this.key=key;}
+  _load(){try{return JSON.parse(localStorage.getItem(this.key))||[];}catch(e){return [];}}
+  _save(a){try{localStorage.setItem(this.key,JSON.stringify(a));}catch(e){}}
+  // entry: {name,difficulty,won,pointsFor,pointsAgainst,longestRally}
+  async submitScore(e){
+    const a=this._load();
+    let r=a.find(x=>x.name.toLowerCase()===e.name.toLowerCase()&&x.difficulty===e.difficulty);
+    if(!r){r={name:e.name,difficulty:e.difficulty,wins:0,losses:0,pointsFor:0,pointsAgainst:0,longestRally:0};a.push(r);}
+    r.name=e.name; if(e.won)r.wins++;else r.losses++;
+    r.pointsFor+=e.pointsFor;r.pointsAgainst+=e.pointsAgainst;r.longestRally=Math.max(r.longestRally,e.longestRally);
+    r.updated=Date.now(); this._save(a); return r;
+  }
+  // difficulty: 'easy'|'medium'|'hard'|'all'
+  async getScores(difficulty="all",limit=10){
+    let a=this._load();
+    if(difficulty==="all"){
+      const m={};
+      for(const r of a){const k=r.name.toLowerCase();const t=m[k]||(m[k]={name:r.name,difficulty:"all",wins:0,losses:0,pointsFor:0,pointsAgainst:0,longestRally:0,score:0});
+        t.wins+=r.wins;t.losses+=r.losses;t.pointsFor+=r.pointsFor;t.pointsAgainst+=r.pointsAgainst;t.longestRally=Math.max(t.longestRally,r.longestRally);t.score+=r.wins*MULT[r.difficulty];}
+      a=Object.values(m);
+    } else a=a.filter(r=>r.difficulty===difficulty).map(r=>({...r,score:r.wins*MULT[r.difficulty]}));
+    a.forEach(r=>r.diff=r.pointsFor-r.pointsAgainst);
+    a.sort((x,y)=>y.score-x.score||y.diff-x.diff||y.longestRally-x.longestRally);
+    return a.slice(0,limit);
+  }
+  async reset(){try{localStorage.removeItem(this.key);}catch(e){}}
+}
+const leaderboard=new LocalLeaderboard("neonpong.leaderboard.v1");
+
+/* ===== Audio ===== */
+let actx=null,muted=false;
+try{muted=localStorage.getItem("neonpong.muted")==="1";}catch(e){}
+function unlockAudio(){
+  if(!actx){const AC=window.AudioContext||window.webkitAudioContext;if(AC)actx=new AC();}
+  if(actx&&actx.state==="suspended")actx.resume();
+}
+function beep(freq,dur=0.07,type="square",vol=0.15,slide=0){
+  if(muted||!actx)return;
+  const t=actx.currentTime,o=actx.createOscillator(),g=actx.createGain();
+  o.type=type;o.frequency.setValueAtTime(freq,t);if(slide)o.frequency.exponentialRampToValueAtTime(Math.max(40,freq+slide),t+dur);
+  g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g).connect(actx.destination);o.start(t);o.stop(t+dur+0.02);
+}
+const sfx={paddle:()=>beep(520,.06),wall:()=>beep(300,.05,"square",.1),
+  score:()=>beep(660,.35,"sawtooth",.12,-500),
+  win:()=>{[523,659,784,1047].forEach((f,i)=>setTimeout(()=>beep(f,.15,"square",.12),i*130));}};
+["pointerdown","touchstart","keydown"].forEach(ev=>window.addEventListener(ev,unlockAudio,{passive:true}));
+
+/* ===== Game ===== */
+const W=800,H=500,PW=12,PH=90,BR=8,WIN=7,BASE=330,MAXS=900;
+const cv=document.getElementById("c"),ctx=cv.getContext("2d");
+let dpr=1,cw=0,ch=0,scale=1,ox=0,oy=0,portrait=false;
+function resize(){
+  dpr=Math.min(window.devicePixelRatio||1,3);cw=innerWidth;ch=innerHeight;
+  cv.width=Math.round(cw*dpr);cv.height=Math.round(ch*dpr);
+  portrait=ch>cw*1.05;
+  const fw=portrait?H:W,fh=portrait?W:H;
+  scale=Math.min(cw/fw,ch/fh)*0.96;ox=(cw-fw*scale)/2;oy=(ch-fh*scale)/2;
+}
+addEventListener("resize",resize);addEventListener("orientationchange",()=>setTimeout(resize,200));resize();
+// screen -> field
+function toField(sx,sy){
+  if(portrait)return{x:W-(sy-oy)/scale,y:(sx-ox)/scale};
+  return{x:(sx-ox)/scale,y:(sy-oy)/scale};
+}
+function setFieldTransform(){
+  const s=scale*dpr;
+  if(portrait)ctx.setTransform(0,-s,s,0,ox*dpr,(oy+W*scale)*dpr);
+  else ctx.setTransform(s,0,0,s,ox*dpr,oy*dpr);
+}
+
+const S={state:"menu",mode:1,diff:"medium",p:[{y:H/2,ty:null,s:0},{y:H/2,ty:null,s:0}],
+  ball:{x:W/2,y:H/2,vx:0,vy:0,sp:BASE},serveT:0,rally:0,longest:0,trail:[],parts:[],flash:0,ai:{err:0,t:0}};
+const AIP={easy:{speed:260,react:.25,err:60},medium:{speed:420,react:.12,err:30},hard:{speed:640,react:.04,err:10}};
+
+function resetMatch(){S.p.forEach(p=>{p.y=H/2;p.s=0;p.ty=null;});S.longest=0;S.parts=[];serve(Math.random()<.5?1:-1);}
+function serve(dir){
+  const b=S.ball;b.x=W/2;b.y=H/2;b.sp=BASE;b.vx=0;b.vy=0;S.serveDir=dir;S.serveT=1.0;S.rally=0;S.trail=[];
+}
+function launch(){const b=S.ball,a=(Math.random()*.6-.3);b.vx=Math.cos(a)*b.sp*S.serveDir;b.vy=Math.sin(a)*b.sp;}
+function burst(x,y,col,n=14){for(let i=0;i<n;i++){const a=Math.random()*6.28,v=60+Math.random()*240;S.parts.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,l:.5+Math.random()*.4,c:col});}}
+
+const keys={};
+addEventListener("keydown",e=>{
+  keys[e.key.toLowerCase()]=true;
+  if(["arrowup","arrowdown"," "].includes(e.key.toLowerCase()))e.preventDefault();
+  if(e.key==="p"||e.key==="P"||e.key==="Escape"){if(S.state==="play")pause();else if(S.state==="pause")resume();}
+  if(e.key==="m"||e.key==="M")toggleMute();
+});
+addEventListener("keyup",e=>{keys[e.key.toLowerCase()]=false;});
+
+// Touch / pointer
+const touches=new Map();
+function handlePoint(id,sx,sy,isMouse){
+  const f=toField(sx,sy);let side;
+  if(S.mode===1)side=0;
+  else if(touches.has(id))side=touches.get(id);
+  else side=f.x<W/2?0:1;
+  if(!isMouse)touches.set(id,side);
+  S.p[side].ty=f.y;
+}
+cv.addEventListener("touchstart",e=>{e.preventDefault();for(const t of e.changedTouches)handlePoint(t.identifier,t.clientX,t.clientY);},{passive:false});
+cv.addEventListener("touchmove",e=>{e.preventDefault();for(const t of e.changedTouches)handlePoint(t.identifier,t.clientX,t.clientY);},{passive:false});
+const endT=e=>{for(const t of e.changedTouches){const s=touches.get(t.identifier);if(s!=null)S.p[s].ty=null;touches.delete(t.identifier);}};
+cv.addEventListener("touchend",endT);cv.addEventListener("touchcancel",endT);
+cv.addEventListener("mousemove",e=>{if(S.mode===1||!portrait)handlePoint("m",e.clientX,e.clientY,true);});
+cv.addEventListener("mouseleave",()=>{S.p[0].ty=null;});
+document.addEventListener("gesturestart",e=>e.preventDefault());
+document.addEventListener("dblclick",e=>e.preventDefault());
+
+function movePaddle(p,dt,up,down){
+  if(up||down){p.ty=null;p.y+=(down-up)*560*dt;}
+  else if(p.ty!=null){p.y+= (p.ty-p.y)*Math.min(1,dt*25);}
+  p.y=Math.max(PH/2,Math.min(H-PH/2,p.y));
+}
+function update(dt){
+  const b=S.ball;
+  if(S.mode===1){
+    movePaddle(S.p[0],dt,!!(keys.w||keys.arrowup),!!(keys.s||keys.arrowdown));
+    // AI
+    const c=AIP[S.diff],p=S.p[1];S.ai.t-=dt;
+    if(S.ai.t<=0){S.ai.t=c.react;S.ai.err=(Math.random()*2-1)*c.err;
+      let target=H/2;
+      if(b.vx>0){ // predict
+        let px=b.x,py=b.y,vx=b.vx,vy=b.vy,tt=(W-30-px)/vx;py+=vy*tt;
+        const span=H-2*BR;py-=BR;py=((py%(2*span))+2*span)%(2*span);if(py>span)py=2*span-py;py+=BR;
+        target=S.diff==="easy"?(b.y+py)/2:py;
+      }
+      S.ai.target=target+S.ai.err;}
+    const d=(S.ai.target??H/2)-p.y;p.y+=Math.sign(d)*Math.min(Math.abs(d),c.speed*dt);
+    p.y=Math.max(PH/2,Math.min(H-PH/2,p.y));
+  } else {
+    movePaddle(S.p[0],dt,!!keys.w,!!keys.s);
+    movePaddle(S.p[1],dt,!!keys.arrowup,!!keys.arrowdown);
+  }
+  if(S.serveT>0){S.serveT-=dt;if(S.serveT<=0)launch();}
+  else{
+    const steps=Math.ceil(b.sp*dt/6);const h=dt/steps;
+    for(let i=0;i<steps;i++){
+      b.x+=b.vx*h;b.y+=b.vy*h;
+      if(b.y<BR){b.y=BR;b.vy=Math.abs(b.vy);sfx.wall();burst(b.x,b.y,"#0ff",5);}
+      if(b.y>H-BR){b.y=H-BR;b.vy=-Math.abs(b.vy);sfx.wall();burst(b.x,b.y,"#0ff",5);}
+      for(let k=0;k<2;k++){
+        const p=S.p[k],px=k===0?24:W-24,dir=k===0?1:-1;
+        if((dir===1?b.vx<0:b.vx>0)&&Math.abs(b.x-px)<PW/2+BR&&Math.abs(b.y-p.y)<PH/2+BR){
+          const rel=Math.max(-1,Math.min(1,(b.y-p.y)/(PH/2)));
+          b.sp=Math.min(MAXS,b.sp*1.05+6);
+          const ang=rel*1.0; // up to ~57 degrees
+          b.vx=Math.cos(ang)*b.sp*dir;b.vy=Math.sin(ang)*b.sp;
+          b.x=px+dir*(PW/2+BR);S.rally++;S.longest=Math.max(S.longest,S.rally);
+          sfx.paddle();burst(b.x,b.y,k===0?"#0ff":"#f0f",12);S.flash=.08;
+        }
+      }
+      if(b.x<-BR*2||b.x>W+BR*2){point(b.x<0?1:0);break;}
+    }
+    S.trail.push({x:b.x,y:b.y});if(S.trail.length>14)S.trail.shift();
+  }
+  for(const q of S.parts){q.x+=q.vx*dt;q.y+=q.vy*dt;q.vx*=.96;q.vy*=.96;q.l-=dt;}
+  S.parts=S.parts.filter(q=>q.l>0);if(S.flash>0)S.flash-=dt;
+}
+function point(who){
+  S.p[who].s++;sfx.score();burst(who===0?W:0,S.ball.y,who===0?"#0ff":"#f0f",30);
+  if(S.p[who].s>=WIN)return gameOver(who);
+  serve(who===0?1:-1);
+}
+
+/* ===== Render ===== */
+function glow(c,b){ctx.shadowColor=c;ctx.shadowBlur=b;ctx.fillStyle=c;ctx.strokeStyle=c;}
+function render(){
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.fillStyle="#05010f";ctx.fillRect(0,0,cw,ch);
+  setFieldTransform();
+  // field
+  const g=ctx.createLinearGradient(0,0,W,0);g.addColorStop(0,"#0a0330");g.addColorStop(.5,"#12043a");g.addColorStop(1,"#0a0330");
+  ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+  if(S.flash>0){ctx.fillStyle="rgba(255,255,255,"+S.flash+")";ctx.fillRect(0,0,W,H);}
+  ctx.lineWidth=3;glow("#7b2fff",14);ctx.strokeRect(1.5,1.5,W-3,H-3);
+  ctx.setLineDash([14,14]);ctx.beginPath();ctx.moveTo(W/2,0);ctx.lineTo(W/2,H);ctx.stroke();ctx.setLineDash([]);
+  // scores (in field so they rotate with the field, readable either way)
+  ctx.save();ctx.translate(W/2,H/2);if(portrait)ctx.rotate(Math.PI/2);
+  ctx.font="bold 72px Courier New";ctx.textAlign="center";ctx.textBaseline="middle";ctx.globalAlpha=.35;
+  if(portrait){glow("#0ff",20);ctx.fillText(S.p[0].s,0,110);glow("#f0f",20);ctx.fillText(S.p[1].s,0,-110);}
+  else{glow("#0ff",20);ctx.fillText(S.p[0].s,-110,0);glow("#f0f",20);ctx.fillText(S.p[1].s,110,0);}
+  ctx.globalAlpha=1;
+  if(S.state==="play"&&S.serveT>0){ctx.font="bold 28px Courier New";glow("#ff0",16);ctx.fillText(S.rally===0&&S.p[0].s+S.p[1].s===0?"GET READY":"SERVE",0,portrait?0:-60);}
+  ctx.restore();
+  // paddles
+  glow("#0ff",22);ctx.fillRect(24-PW/2,S.p[0].y-PH/2,PW,PH);
+  glow("#f0f",22);ctx.fillRect(W-24-PW/2,S.p[1].y-PH/2,PW,PH);
+  // trail + ball
+  if(S.serveT<=0){S.trail.forEach((t,i)=>{ctx.globalAlpha=i/S.trail.length*.5;glow("#ff0",10);ctx.beginPath();ctx.arc(t.x,t.y,BR*i/S.trail.length,0,6.29);ctx.fill();});ctx.globalAlpha=1;}
+  glow("#fff",24);ctx.beginPath();ctx.arc(S.ball.x,S.ball.y,BR,0,6.29);ctx.fill();
+  for(const q of S.parts){ctx.globalAlpha=Math.max(0,q.l*1.6);glow(q.c,8);ctx.fillRect(q.x-2,q.y-2,4,4);}
+  ctx.globalAlpha=1;ctx.shadowBlur=0;
+}
+let last=performance.now();
+function loop(now){
+  const dt=Math.min(.05,(now-last)/1000);last=now;
+  if(S.state==="play")update(dt);
+  else if(S.state==="menu"){ // attract mode
+    const b=S.ball;if(!b.vx){b.vx=250;b.vy=160;}
+    b.x+=b.vx*dt;b.y+=b.vy*dt;if(b.y<BR||b.y>H-BR)b.vy*=-1;if(b.x<30||b.x>W-30)b.vx*=-1;
+    S.p[0].y+=(b.y-S.p[0].y)*.1;S.p[1].y+=(b.y-S.p[1].y)*.1;S.serveT=0;
+    S.trail.push({x:b.x,y:b.y});if(S.trail.length>14)S.trail.shift();
+  }
+  render();requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+/* ===== UI ===== */
+const $=id=>document.getElementById(id);
+const screens=["menu","pause","over","lb"];
+function show(id){screens.forEach(s=>$(s).classList.toggle("hidden",s!==id));$("hud").classList.toggle("hidden",id!==null);}
+function start(mode){unlockAudio();S.mode=mode;resetMatch();S.state="play";show(null);}
+function pause(){if(S.state!=="play")return;S.state="pause";show("pause");$("hud").classList.add("hidden");}
+function resume(){S.state="play";show(null);last=performance.now();}
+function toggleMute(){muted=!muted;try{localStorage.setItem("neonpong.muted",muted?"1":"0");}catch(e){}$("bMute").textContent=muted?"🔇":"🔊";}
+$("bMute").textContent=muted?"🔇":"🔊";
+let lastName="";try{lastName=localStorage.getItem("neonpong.name")||"";}catch(e){}
+let pending=null;
+function gameOver(who){
+  S.state="over";sfx.win();
+  const a=S.p[0].s,b=S.p[1].s;
+  $("winTxt").textContent=S.mode===1?(who===0?"YOU WIN!":"AI WINS"):(who===0?"PLAYER 1 WINS!":"PLAYER 2 WINS!");
+  $("winTxt").style.color=who===0?"#0ff":"#f0f";
+  $("statTxt").textContent=`Final ${a} – ${b} · Longest rally: ${S.longest}`+(S.mode===1?` · ${S.diff.toUpperCase()}`:"");
+  if(S.mode===1){pending={difficulty:S.diff,won:who===0,pointsFor:a,pointsAgainst:b,longestRally:S.longest};
+    $("nameBox").classList.remove("hidden");$("nameIn").value=lastName;$("bSave").disabled=false;$("bSave").textContent="SAVE SCORE";}
+  else{pending=null;$("nameBox").classList.add("hidden");}
+  show("over");$("hud").classList.add("hidden");
+}
+async function saveScore(){
+  if(!pending)return;const n=$("nameIn").value.trim().slice(0,14)||"Player";
+  lastName=n;try{localStorage.setItem("neonpong.name",n);}catch(e){}
+  await leaderboard.submitScore({name:n,...pending});pending=null;
+  $("bSave").disabled=true;$("bSave").textContent="SAVED ✓";
+}
+let lbTab="all";
+async function renderLB(){
+  document.querySelectorAll("#lbTabs button").forEach(b=>b.classList.toggle("sel",b.dataset.t===lbTab));
+  const rows=await leaderboard.getScores(lbTab,10);
+  const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const medal=["🥇","🥈","🥉"];
+  $("lbTable").innerHTML="<tr><th>#</th><th>Name</th><th>Score</th><th>W-L</th><th>Pts</th><th>Diff</th><th>Rally</th></tr>"+
+    (rows.length?rows.map((r,i)=>`<tr><td>${medal[i]||i+1}</td><td>${esc(r.name)}</td><td>${r.score}</td><td>${r.wins}-${r.losses}</td><td>${r.pointsFor}</td><td>${r.diff>0?"+":""}${r.diff}</td><td>${r.longestRally}</td></tr>`).join("")
+    :`<tr><td colspan="7" style="color:#aaa;text-shadow:none">No scores yet — beat the AI!</td></tr>`);
+}
+document.querySelectorAll("#diffRow button").forEach(b=>b.onclick=()=>{S.diff=b.dataset.d;document.querySelectorAll("#diffRow button").forEach(x=>x.classList.toggle("sel",x===b));});
+document.querySelectorAll("#lbTabs button").forEach(b=>b.onclick=()=>{lbTab=b.dataset.t;renderLB();});
+$("b1p").onclick=()=>start(1);$("b2p").onclick=()=>start(2);
+$("bPause").onclick=pause;$("bMute").onclick=toggleMute;$("bResume").onclick=resume;
+$("bRestart").onclick=()=>start(S.mode);
+const toMenu=()=>{S.state="menu";S.p.forEach(p=>p.s=0);show("menu");$("hud").classList.add("hidden");};
+$("bQuit").onclick=toMenu;$("bMenu2").onclick=async()=>{toMenu();};
+$("bAgain").onclick=()=>start(S.mode);$("bSave").onclick=saveScore;
+$("nameIn").addEventListener("keydown",e=>{e.stopPropagation();if(e.key==="Enter")saveScore();});
+$("bLB").onclick=()=>{show("lb");$("hud").classList.add("hidden");renderLB();};
+$("bLBBack").onclick=()=>{show("menu");$("hud").classList.add("hidden");};
+$("bLBReset").onclick=async()=>{if(confirm("Reset the leaderboard on this device? This cannot be undone.")){await leaderboard.reset();renderLB();}};
+document.addEventListener("visibilitychange",()=>{if(document.hidden)pause();});
+show("menu");$("hud").classList.add("hidden");
+</script>
+</body></html>
